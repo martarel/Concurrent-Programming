@@ -1,0 +1,4 @@
+bin/
+.*
+play.scala
+notes.txt
