@@ -1,6 +1,55 @@
 import ox.scl._
 
-/** Simulation of the Dining Philosophers with a Butler.*/
+/** Simulation of the Dining Philosophers with a Butler to avoid deadlock.*/
+/** Butler essentially implements the RAServer trait from lectures.*/
+class Butler(numSeats: Int){
+  type Message = String
+  type Philosopher = Int
+  private type ReplyChan = Chan[Message]
+  /* Channel for requesting a seat. */
+  private val requestChan = new BuffChan[ReplyChan](5)
+  /* Channel for returning a seat. */
+  private val returnChan = new SyncChan[Message]
+
+  private def server = thread{
+    // Reply channels for requests that cannot be served immediately.
+    val pending = new scala.collection.mutable.Queue[ReplyChan]
+    // Invariant: if pending is non-empty, then all seats are taken.
+    var takenSeats = 0
+    serve(
+      requestChan =?=> { replyChan => 
+        println(s"Hanndling a new philosopher, currently $takenSeats out of $numSeats seats taken");
+        if(takenSeats == numSeats) pending.enqueue(replyChan) // Philospher has to wait
+        else{  // Allow philosopher to sit
+            takenSeats += 1; replyChan!"Sit!"
+        }
+        }
+      | returnChan =?=> { message =>  
+          println(s"Handling a return, currently $takenSeats out of $numSeats seats taken");
+          if(pending.nonEmpty) pending.dequeue()!"Sit!" // Allocate seat to blocked philosopher
+          else takenSeats -= 1
+      }
+    )
+  }
+  // Fork off the server
+  server.fork
+
+  /** Request a seat. */
+  def requestSeat(me:Philosopher): Message = {
+    val replyChan =  new SyncChan[Message]
+    requestChan!replyChan  // send request
+    val response = replyChan?() // wait for response
+    println(s"$response $me")
+    response
+  }
+
+  /** Return a seat. */
+  def returnSeat(me: Philosopher) = {
+    println(s"Hope you enjoyed the meal $me")
+    returnChan!"Returning seat"
+  }
+}
+
 object Variant2{
   val N = 5 // Number of philosophers
 
@@ -11,38 +60,19 @@ object Variant2{
 
   type Command = Boolean
   val Pick = true; val Drop = false
-
-  type ButlerCommunication = String
-  val Ask = "ask"; val Granted = "granted"; val Leave = "leave"
-
-  def butler(askIn: `?`[ButlerCommunication], askOut: ![ButlerCommunication], tellIn:`?`[ButlerCommunication]) = thread("Butler"){
-    var seated = 0;
-    serve(
-        (seated < N - 1) && askIn =?=> {
-          x => ;println(s"Permission granted for ${x.takeRight(1)}"); seated = seated + 1; askOut!Granted
-        }
-        |
-        tellIn =?=> {
-          x => assert(x == Leave); seated = seated - 1;
-        }
-    )
-  }
  
   /** A single philosopher. */
-  def phil(me: Int, askIn: `?`[ButlerCommunication], askOut: ![ButlerCommunication], tellOut: ![ButlerCommunication], left: ![Command], right: ![Command]) = thread("Phil"+me){
+  def phil(me: Int, left: ![Command], right: ![Command], butler: Butler) = thread("Phil"+me){
     repeat{
       Think
       println(s"$me asking for permission");
-      var allowed = false
-      askOut!(Ask + me.toString)
-      allowed = askIn ? () == Granted
+      butler.requestSeat(me);
       println(s"$me sits"); Pause
       left!Pick; println(s"$me picks up left fork"); Pause
       right!Pick; println(s"$me picks up right fork"); Pause
       println(s"$me eats"); Eat
       left!Drop; Pause; right!Drop; Pause
-      println(s"$me leaves")
-      tellOut!Leave
+      println(s"$me leaves"); butler.returnSeat(me)
     }
   } 
 
@@ -62,23 +92,21 @@ object Variant2{
   /** The complete system. */ 
   def system = {
     // Channels to pick up and drop the forks:
-    val philToLeftFork, philToRightFork = Array.fill(N)(new SyncChan[Command])
     // philToLeftFork(i) is from Phil(i) to Fork(i);
     // philToRightFork(i) is from Phil(i) to Fork((i-1)%N)
-    val ask, grant, tell, recieve = new SyncChan[ButlerCommunication]
+    val philToLeftFork, philToRightFork = Array.fill(N)(new SyncChan[Command])
+    val butler = new Butler(N-1)
     val allPhils = || ( 
       for (i <- 0 until N)
-      yield phil(i, grant, ask, tell, philToLeftFork(i), philToRightFork(i))
+      yield phil(i, philToLeftFork(i), philToRightFork(i), butler)
     )
     val allForks = || ( 
       for (i <- 0 until N)
       yield fork(i, philToRightFork((i+1)%N), philToLeftFork(i))
     )
-    allPhils || allForks || butler(ask, grant, recieve)
+    allPhils || allForks
   }
 
   /** Run the system. */
   def main(args : Array[String]) = { run(system) }
 }
-
-  

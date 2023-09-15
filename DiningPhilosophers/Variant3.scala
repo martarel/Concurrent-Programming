@@ -1,7 +1,7 @@
 
 import ox.scl._
 
-/** Simulation of the Dining Philosophers with timeouts. */
+/** Simulation of the Dining Philosophers with timeouts to avoid deadlock. */
 object Variant3{
   val N = 5 // Number of philosophers
 
@@ -26,6 +26,7 @@ object Variant3{
         left!Drop;
         println(s"$me dropping left fork to wait for right fork");
         left!Pick; println(s"$me picks up left fork again"); Pause
+        //Set waiting time to 100ms * philosopher number to avoid deadlock
         rightAcquired = right.sendWithin(me*100)(Pick)
         Pause(me*100)
       }
