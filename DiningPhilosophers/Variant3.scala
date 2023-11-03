@@ -1,4 +1,3 @@
-
 import ox.scl._
 
 /** Simulation of the Dining Philosophers with timeouts to avoid deadlock. */
