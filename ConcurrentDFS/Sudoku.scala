@@ -20,15 +20,26 @@ object SudokuGraph extends Graph[Partial]{
 /** A program for solving Sudoku problems, based on a GraphSearch object.  
   * 
   * This expects to find the filename for the starting position as the first
-  * argument on the command line.  */
+  * argument on the command line or runs all tests if argument all provided.  */
 object Sudoku{
   def main(args: Array[String]) = {
     val fname = args(0)
     val useConc = args.length > 1 && args(1) == "--conc"
+    if (fname == "all") {
+      for (i <- 1 to 10) {
+        val fname = "test" + i.toString + ".sud"
+        run(fname, true)
+      }
+    } else {
+      run(fname, useConc)
+    }
+  }
+  
+  def run(fname:String, useConc:Boolean) = {
     val p = new Partial; p.init(fname)
     val g = SudokuGraph
     val solver: GraphSearch[Partial] =
-      if(useConc) new ConcGraphSearch(g) else new SeqGraphSearch(g)
+    if(useConc) new ConcGraphSearch(g) else new SeqGraphSearch(g)
     solver(p, _.complete) match{
       case Some(p1) => p1.printPartial
       case None => println("No solution found")
