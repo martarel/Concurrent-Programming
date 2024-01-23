@@ -5,7 +5,7 @@ import scala.util.Random
 /** A single comparator, inputting on in0 and in1, and outputting on out0
 * (smaller value) and out1 (larger value). */
 def comparator(in0: `?`[Int], in1: `?`[Int], out0: ![Int ], out1: ![Int ]): ThreadGroup = thread{
-    repeat(!in0.isClosed && !in1.isClosed){
+    repeat{
         val x = in0 ? ()
         val y = in1 ? ()
         if (x < y) {
@@ -16,6 +16,18 @@ def comparator(in0: `?`[Int], in1: `?`[Int], out0: ![Int ], out1: ![Int ]): Thre
             out1 ! x
         }
     }
+}
+
+def comparatorEitherOrder(in0: `?`[Int], in1: `?`[Int], out0: ![Int ], out1: ![Int ]): ThreadGroup = thread{
+    var x0 = 0
+    var x1 = 0
+    var read = true
+    serve(
+        read && in0 =?=>{x => x0 = x; x1 = in1 ? (); read = false}
+        | read && in1 =?=>{x => x1 = x; x0 = in0 ? (); read = false}
+        | !read && out0 =!=>{x0 min x1} ==> {out1 ! (x0 max x1); read = true}
+        | !read && out1 =!=>{x0 max x1} ==> {out1 ! (x0 min x1); read = true}
+    )
 }
 
 //Task 2
@@ -65,6 +77,7 @@ def insert(ins: List [`?`[Int]], in: `?`[Int], outs: List [![Int]]): ThreadGroup
     val n = ins.length; require(n >= 1 && outs.length == n+1)
     val x = in ? ()
     val y = ins(0) ? ()
+    //Base case
     if (n == 1) {
         if (x <= y) {
             outs(0) ! x
@@ -74,6 +87,7 @@ def insert(ins: List [`?`[Int]], in: `?`[Int], outs: List [![Int]]): ThreadGroup
             outs(1) ! x
         }
     }
+    //Early termination case
     else if (x <= y) {
         outs(0) ! x
         outs(1) ! y
@@ -81,6 +95,7 @@ def insert(ins: List [`?`[Int]], in: `?`[Int], outs: List [![Int]]): ThreadGroup
             val z = ins(i-1) ? ()
             outs(i) ! z
         }
+    //Recursive case
     } else {
         outs(0) ! y 
         val in2 = new SyncChan[Int]
@@ -108,7 +123,49 @@ def testInsert: Unit = {
 }
 
 //Task 4
+/** Insert a value input on in into a sorted sequence input on ins.
+* Pre: ins.length = n && outs.length = n+1, for some n >= 1.
+* If the values xs input on ins are sorted, and x is input on in, then a
+* sorted permutation of x::xs is output on ys. 
+* Note: requires ins and outs to be written and read in arbitrary order
+* O(log(n))*/
 def fastInsert(ins: List [`?`[Int]], in: `?`[Int], outs: List [![Int]]): ThreadGroup = thread{
+    val n = ins.length; require(outs.length == n+1)
+    val x0 = in ? ()
+    //base cases
+    if (n == 0){
+        outs(0) ! x0
+    }
+    else if (n == 1){
+        val x1 = ins(0) ? ()
+        outs(0) ! (x0 min x1)
+        outs(1) ! (x0 max x1)
+    }
+    //recursive case
+    else {
+        val m = n / 2 // 0 <= m < n 
+        val x1 = ins(m) ? ()
+        //ins[0..m] <= x0
+        if (x1 <= x0){
+            outs(m) ! x1
+            for (i <- 0 until m){
+                outs(i) ! (ins(i) ?())
+            }
+            val inUtil = new SyncChan[Int]
+            run(fastInsert(ins.drop(m+1), inUtil, outs.drop(m+1)) || thread{inUtil ! x0})
+        //ins[m..n) > x0
+        } else {
+            outs(m+1) ! x1 
+            for (i <- (m+1) until n){
+                outs(i+1) ! (ins(i) ?())
+            }
+            val inUtil = new SyncChan[Int]
+            run(fastInsert(ins.take(m), inUtil, outs.take(m+1)) || thread{inUtil ! x0})
+        }
+    }
+}
+
+def fastInsertIterative(ins: List [`?`[Int]], in: `?`[Int], outs: List [![Int]]): ThreadGroup = thread{
     val n = ins.length; require(n >= 1 && outs.length == n+1)
     val x = in ? ()
     val xs = new Array[Int](n)
@@ -120,7 +177,6 @@ def fastInsert(ins: List [`?`[Int]], in: `?`[Int], outs: List [![Int]]): ThreadG
     var r = n
     //Invariant: 0 <= l < r <= n; x should be inserted in xs[l..r); xs[0..l) <= x < xs[r..n); xs[0..l) and xs[r..n) have been sent to correct outs
     while (l < r-1) {
-        println(l, r)
         val m = (l+r)/2 //l < m < r
         val y = xs(m)
         if (x < y) {
@@ -144,20 +200,21 @@ def fastInsert(ins: List [`?`[Int]], in: `?`[Int], outs: List [![Int]]): ThreadG
 }
 
 def testFastInsert: Unit = {
-    val size = 10
-    for (i <- 1 to 1) {
+    val size = 100
+    for (i <- 1 to 100) {
         print(".")
         val xs = List.fill(size)(scala.util.Random.nextInt(100)).sorted
-        println(xs)
         val x = scala.util.Random.nextInt(100)
-        println(x)
         val ys = new Array[Int](size+1)
         val ins = List.fill(size)(new SyncChan[Int])
         val outs = List.fill(size+1)(new SyncChan[Int])
         val in = new SyncChan[Int]
-        def sender = thread{in ! x; for(i <- 0 until size) {ins(i) ! xs(i)}}
-        def receiver = thread{for(i <- 0 until (size+1)) {ys(i) = outs(i) ? ()}}
-        run(sender || fastInsert(ins, in, outs) || receiver)
+        //def sender = thread{in ! x; for(i <- 0 until size) {ins(i) ! xs(i)}}
+        //def receiver = thread{for(i <- 0 until (size+1)) {ys(i) = outs(i) ? ()}}
+        //run(sender || fastInsert(ins, in, outs) || receiver)
+        def senders = (|| (for(i <- 0 until (size)) yield thread{ins(i) ! xs(i)}))
+        def recievers = (|| (for(i <- 0 until (size+1)) yield thread{ys(i) = outs(i) ? ()}))
+        run(thread{in ! x} || senders || recievers || fastInsert(ins, in, outs) )
         assert((x :: xs).sorted.sameElements(ys))
     }
     println()
@@ -168,10 +225,23 @@ def testFastInsert: Unit = {
 /** Insertion sort. */
 def insertionSort(ins: List [`?`[Int]], outs: List [![Int]]) : ThreadGroup = thread{
     val n = ins.length; require(n >= 2 && outs.length == n)
+    if (n == 2){
+        val x0 = ins(0) ? ()
+        val x1 = ins(1) ? ()
+        outs(0) ! (x0 min x1)
+        outs(1) ! (x0 max x1)
+    } else {
+        val outsUtil = List.fill(n-1)(new SyncChan[Int])
+        run (insertionSort(ins.tail, outsUtil) || insert(outsUtil, ins.head, outs))
+    }
+}
+
+def insertionSortIterative(ins: List [`?`[Int]], outs: List [![Int]]) : ThreadGroup = thread{
+    val n = ins.length; require(n >= 2 && outs.length == n)
     val xs = new Array[Int](n)
     val x1 = ins(0) ? ()
     xs(0) = x1
-    //Invariant: xs [0::i) is sorted and we aim to make ins(i):xs[0..i) sorted and set it to xs[0..i]
+    //Invariant: xs [0::i) is sorted and we aim to make ins(i):xs[0..i) sorted and set xs[0..i] to it
     for (i <- 1 until n) {
         val ys = new Array[Int](i+1)
         val insUtil = List.fill(i)(new SyncChan[Int])
@@ -184,13 +254,11 @@ def insertionSort(ins: List [`?`[Int]], outs: List [![Int]]) : ThreadGroup = thr
             xs(i) = ys(i)
         }
     }
-    def sender = thread{for(i <- 0 until n) {outs(i) ! xs(i)}}
-    run(sender)
+    run(thread{for(i <- 0 until n) {outs(i) ! xs(i)}})
 }
 
-
 def testInsertionSort: Unit = {
-    val size = 40
+    val size = 50
     for (i <- 1 to 49) {
         print(".")
         val xs = Array.fill(size)(scala.util.Random.nextInt(100))
@@ -199,7 +267,9 @@ def testInsertionSort: Unit = {
         val outs = List.fill(size)(new SyncChan[Int])
         def sender = thread{for(i <- 0 until size) {ins(i) ! xs(i)}}
         def receiver = thread{for(i <- 0 until size) {ys(i) = outs(i) ? ()}}
-        run(sender || insertionSort(ins, outs) || receiver)
+        def senders = (|| (for(i <- 0 until (size)) yield thread{ins(i) ! xs(i)}))
+        def receivers = (|| (for(i <- 0 until (size)) yield thread{ys(i) = outs(i) ? ()}))
+        run(senders || insertionSort(ins, outs) || receivers)
         assert(xs.sorted.sameElements(ys))
     }
     println()
